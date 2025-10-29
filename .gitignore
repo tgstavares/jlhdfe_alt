@@ -1,0 +1,13 @@
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Stata run artifacts
+*.log
+*.smcl
+*_coef.csv
+*_summary.txt
+temp.parquet
+formula.txt
