@@ -1,13 +1,11 @@
 v 3
 d jlhdfe_alt — Stata front-end for Julia FixedEffectModels
-d Author: (your name/email)
+d Author: Tiago Tavares <…>
 d Requires: Stata 15+, parquet (ssc install parquet), Julia 1.9+, FixedEffectModels.jl, Vcov, Parquet2, StatsModels
 
-* put ado + help in the default PLUS layout
-t .
+* install these files into PLUS/.../jlhdfe_alt/
+t jlhdfe_alt
 f jlhdfe_alt.ado
 f jlhdfe_alt.sthlp
 f fem_cli.jl
-
-* reset (optional)
 t .
