@@ -236,7 +236,7 @@ program define jlhdfe_alt, eclass
 	if `"`CLARG'"' != "" local CLARGQ `"`CLARG'"'
 
 	preserve
-        // Apply [in] then [if]
+    // Apply [in] then [if]
 	// Apply [in] then [if]
         if "`in'" != "" keep `in'
 	if "`if'" != "" keep `if'
@@ -266,7 +266,7 @@ program define jlhdfe_alt, eclass
         // build + run Julia cmd
         local CMD ""
         if `threads' > 0 local CMD `"JULIA_NUM_THREADS=`threads' "'
-        local CMD `"`CMD'`julia' `femcli' "`pqfile'" "formula.txt" `CLARGQ' "`method'" "`outprefix'" 0"'
+        local CMD `"`CMD'`julia' "`femcli'" "`pqfile'" "formula.txt" `CLARGQ' "`method'" "`outprefix'" 0"'
         di as txt ">> " as res `"`CMD'"'
         ! `CMD'
 
