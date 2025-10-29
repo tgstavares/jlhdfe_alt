@@ -7,9 +7,6 @@ d Requires: Stata 15+, parquet (ssc install parquet), Julia 1.9+, FixedEffectMod
 t .
 f jlhdfe_alt.ado
 f jlhdfe_alt.sthlp
-
-* put the Julia helper in PLUS/jlhdfe_alt/
-t jlhdfe_alt
 f fem_cli.jl
 
 * reset (optional)
