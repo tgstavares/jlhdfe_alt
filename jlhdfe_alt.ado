@@ -17,14 +17,35 @@ program define jlhdfe_alt, eclass
 	if "`julia'"     == "" local julia     "julia"
 	if "`femcli'"    == "" local femcli    "fem_cli.jl"
 
-	* If femcli() not provided, look for fem_cli.jl in the same directory as this ado
-	if "`femcli'" == "" {
-    	quietly capture findfile jlhdfe_alt.ado
-    	if !_rc {
-        	local __pkgdir = subinstr(r(fn), "jlhdfe_alt.ado", "", .)
-        	local femcli "`__pkgdir'fem_cli.jl"
-    	}
+	* --- Resolve fem_cli.jl path (option > adopath > next to ado) ---
+	if "`femcli'" != "" {
+		capture confirm file "`femcli'"
+		if _rc {
+			di as err "femcli(`femcli') not found; provide a full path."
+			exit 601
+		}
 	}
+	else {
+		quietly capture findfile fem_cli.jl
+		if !_rc {
+			local femcli "`r(fn)'"
+		}
+		else {
+			quietly capture findfile jlhdfe_alt.ado
+			if !_rc {
+				local __pkgdir = subinstr("`r(fn)'","jlhdfe_alt.ado","",.)
+				capture confirm file "`__pkgdir'fem_cli.jl"
+				if !_rc local femcli "`__pkgdir'fem_cli.jl"
+			}
+		}
+		if "`femcli'" == "" {
+			di as err "Could not locate fem_cli.jl on adopath."
+			di as err "Either net install jlhdfe_alt (so fem_cli.jl lands in PLUS) or pass femcli(/full/path/to/fem_cli.jl)."
+			exit 601
+		}
+	}
+
+	di as txt ">> fem_cli.jl: " as res "`femcli'"
 
 	// 1) Split spec into depvar and RHS (RHS may include (endog = instr))
 	local lhsrhs `spec'
