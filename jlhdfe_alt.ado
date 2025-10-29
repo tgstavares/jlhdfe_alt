@@ -15,32 +15,31 @@ program define jlhdfe_alt, eclass
 	if "`outprefix'" == "" local outprefix "fem_out"
 	if "`pqfile'"    == "" local pqfile    "temp.parquet"
 	if "`julia'"     == "" local julia     "julia"
-	if "`femcli'"    == "" local femcli    "fem_cli.jl"
 
-	* --- Resolve fem_cli.jl path (option > adopath > next to ado) ---
-	if "`femcli'" != "" {
-		capture confirm file "`femcli'"
+	* --- fem_cli.jl path resolution ---
+	if "`femcli'" == "" {
+		quietly capture findfile fem_cli.jl
 		if _rc {
-			di as err "femcli(`femcli') not found; provide a full path."
+			di as err "Could not locate fem_cli.jl on adopath."
+			di as err "Either net install jlhdfe_alt (so fem_cli.jl lands in PLUS) or pass femcli(/full/path/to/fem_cli.jl)."
 			exit 601
+		}
+		local femcli "`r(fn)'"
+		// expand leading ~ -> $HOME so the shell can open it even when quoted
+		capture noisily local __home : env HOME
+		if "`__home'" != "" & substr("`femcli'",1,1)=="~" {
+			local femcli = subinstr("`femcli'","~","`__home'",1)
 		}
 	}
 	else {
-		quietly capture findfile fem_cli.jl
-		if !_rc {
-			local femcli "`r(fn)'"
+		// user provided something; if it's just a bare filename, try adopath
+		if strpos("`femcli'","/")==0 & strpos("`femcli'","\")==0 & strpos("`femcli'",":")==0 {
+			quietly capture findfile "`femcli'"
+			if !_rc local femcli "`r(fn)'"
 		}
-		else {
-			quietly capture findfile jlhdfe_alt.ado
-			if !_rc {
-				local __pkgdir = subinstr("`r(fn)'","jlhdfe_alt.ado","",.)
-				capture confirm file "`__pkgdir'fem_cli.jl"
-				if !_rc local femcli "`__pkgdir'fem_cli.jl"
-			}
-		}
-		if "`femcli'" == "" {
-			di as err "Could not locate fem_cli.jl on adopath."
-			di as err "Either net install jlhdfe_alt (so fem_cli.jl lands in PLUS) or pass femcli(/full/path/to/fem_cli.jl)."
+		capture confirm file "`femcli'"
+		if _rc {
+			di as err "femcli(`femcli') not found; provide a full path or a filename on adopath."
 			exit 601
 		}
 	}
@@ -236,7 +235,7 @@ program define jlhdfe_alt, eclass
 	if `"`CLARG'"' != "" local CLARGQ `"`CLARG'"'
 
 	preserve
-    // Apply [in] then [if]
+	// Apply [in] then [if]
 	// Apply [in] then [if]
         if "`in'" != "" keep `in'
 	if "`if'" != "" keep `if'
@@ -265,10 +264,10 @@ program define jlhdfe_alt, eclass
 
         // build + run Julia cmd
         local CMD ""
-        if `threads' > 0 local CMD `"JULIA_NUM_THREADS=`threads' "'
-        local CMD `"`CMD'`julia' "`femcli'" "`pqfile'" "formula.txt" `CLARGQ' "`method'" "`outprefix'" 0"'
-        di as txt ">> " as res `"`CMD'"'
-        ! `CMD'
+	if `threads' > 0 local CMD `"JULIA_NUM_THREADS=`threads' "'
+	local CMD `"`CMD'`julia' "`femcli'" "`pqfile'" "formula.txt" `CLARGQ' "`method'" "`outprefix'" 0"'
+	di as txt ">> " as res `"`CMD'"'
+	! `CMD'
 
 	// === collect results into matrices (inside preserve) ===
 	quietly count
