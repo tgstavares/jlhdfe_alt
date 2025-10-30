@@ -5,16 +5,22 @@
 #   julia fem_cli.jl temp.parquet formula.txt ntrab cuda fem_out 200000
 #   julia fem_cli.jl temp.parquet formula.txt ""    cpu  fem_out
 
-using DataFrames, StatsModels, FixedEffectModels, Vcov, LinearAlgebra, CSV, Parquet2, CategoricalArrays
+@time using DataFrames, StatsModels, FixedEffectModels, Vcov, LinearAlgebra, CSV, Parquet2, CategoricalArrays, CUDA, Dates
 BLAS.set_num_threads(1)
 
-# --- load CUDA at top-level if available ---
-const HAVE_CUDA = try
-    @eval using CUDA
-    true
-catch
-    false
-end
+# I want to know the time of the next lines
+
+# @time begin
+#     # --- load CUDA at top-level if available ---
+#     const HAVE_CUDA = try
+#         @eval using CUDA
+#         true
+#     catch
+#         false
+#     end
+# end
+
+# println("Current time a: ", Dates.format(now(), "HH:MM:SS"))
 
 function translate_stata_factors(s::AbstractString)
     t = String(s)
@@ -70,6 +76,8 @@ function translate_stata_factors(s::AbstractString)
     return t2, ivars, ibase, unique(fevars)
 end
 
+# println("Current time b: ", Dates.format(now(), "HH:MM:SS"))
+
 # --- pull all variables we need to load from parquet (formula + FE + clusters) ---
 function needed_vars(translated::String, fevars::Vector{String}, clusters_str::String)
     # remove fe(...) blocks; we already collected fevars
@@ -81,10 +89,16 @@ function needed_vars(translated::String, fevars::Vector{String}, clusters_str::S
     return unique(vcat(toks, fevars, cls))
 end
 
+# println("Current time c: ", Dates.format(now(), "HH:MM:SS"))
+
 function main(args)
+    # println("Current time 1: ", Dates.format(now(), "HH:MM:SS"))
+
     length(args) ≥ 5 || error("Need: IN_PARQUET FORMULA_TXT CLUSTERS METHOD OUT_PREFIX [WARM_N]")
     parquet_path, formula_txt, clusters_str, method_str, outprefix = args[1:5]
     warm_n = (length(args) ≥ 6 && tryparse(Int, args[6]) !== nothing) ? parse(Int, args[6]) : 0
+
+    # println("Current time 2: ", Dates.format(now(), "HH:MM:SS"))
 
     # read + translate formula
     raw_formula = strip(read(formula_txt, String))
@@ -93,11 +107,16 @@ function main(args)
     println("Formula (StatsModels):  ", translated)
     println("Clusters:               ", clusters_str)
 
+    # println("Current time 3: ", Dates.format(now(), "HH:MM:SS"))
+
     # load only referenced columns (RHS+LHS+FE+clusters)
     cols = Symbol.(needed_vars(translated, fevars, clusters_str))
     @time ds = Parquet2.Dataset(parquet_path)
     @time df = DataFrame(Parquet2.select(ds, cols...); copycols=false)
+    # display the column names loaded
+    println("Loaded columns: ", names(df))
 
+    # println("Current time 4: ", Dates.format(now(), "HH:MM:SS"))
 
     # make i.-vars categorical and apply ib(#) base (by string match → robust for any level type)
     for v in ivars
@@ -125,6 +144,8 @@ function main(args)
         end
     end
 
+    # println("Current time 5: ", Dates.format(now(), "HH:MM:SS"))
+
     # build formula
     f = eval(Meta.parse("@formula($(translated))"))
 
@@ -136,6 +157,8 @@ function main(args)
         Vcov.cluster(Symbol.(strip.(split(clusters, ",")))...)
     end
 
+    # println("Current time 6: ", Dates.format(now(), "HH:MM:SS"))
+
     # method mapping
     ms = lowercase(strip(method_str))
     method = ms in ("cuda","gpu") ? :CUDA :
@@ -144,7 +167,7 @@ function main(args)
 
     # optional GPU warm-up
     if method === :CUDA
-        HAVE_CUDA || error("METHOD=CUDA requested but CUDA.jl is not available")
+        #HAVE_CUDA || error("METHOD=CUDA requested but CUDA.jl is not available")
         @assert CUDA.functional() "CUDA is not functional on this machine"
         CUDA.precompile_runtime()
         if warm_n > 0
@@ -152,15 +175,25 @@ function main(args)
             @time _ = reg(warm, f; method=:CUDA)
             CUDA.synchronize()
         end
+        println("CUDA is ready.")
+        println("CPU threads: ", Threads.nthreads())
+        println("BLAS threads: ", BLAS.get_num_threads())
     end
+
+    # println("Current time 7: ", Dates.format(now(), "HH:MM:SS"))
 
     # fit + outputs
     @time m = reg(df, f, vc; method=method)
     open(outprefix * "_summary.txt", "w") do io
         show(io, MIME"text/plain"(), m); println(io)
     end
+
+    # println("Current time 8: ", Dates.format(now(), "HH:MM:SS"))
+
     β = coef(m); V = Matrix(vcov(m)); se = sqrt.(diag(V))
     CSV.write(outprefix * "_coef.csv", DataFrame(term=StatsModels.coefnames(m), estimate=β, stderr=se))
+
+    # println("Current time 9: ", Dates.format(now(), "HH:MM:SS"))
 end
 
 main(ARGS)
