@@ -6,7 +6,7 @@
 #   julia fem_cli.jl temp.parquet formula.txt ""    cpu  fem_out
 
 @time using DataFrames, StatsModels, FixedEffectModels, Vcov, LinearAlgebra, CSV, Parquet2, CategoricalArrays, CUDA, Dates
-BLAS.set_num_threads(1)
+#BLAS.set_num_threads(1)
 
 # I want to know the time of the next lines
 
