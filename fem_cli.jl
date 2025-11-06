@@ -172,7 +172,7 @@ function main(args)
         CUDA.precompile_runtime()
         if warm_n > 0
             warm = first(df, min(nrow(df), warm_n))
-            @time _ = reg(warm, f; method=:CUDA)
+            @time _ = reg(warm, f; method=:CUDA, progress_bar=false)
             CUDA.synchronize()
         end
         println("CUDA is ready.")
@@ -183,7 +183,7 @@ function main(args)
     # println("Current time 7: ", Dates.format(now(), "HH:MM:SS"))
 
     # fit + outputs
-    @time m = reg(df, f, vc; method=method)
+    @time m = reg(df, f, vc; method=method, progress_bar=false)
     open(outprefix * "_summary.txt", "w") do io
         show(io, MIME"text/plain"(), m); println(io)
     end
@@ -192,6 +192,37 @@ function main(args)
 
     β = coef(m); V = Matrix(vcov(m)); se = sqrt.(diag(V))
     CSV.write(outprefix * "_coef.csv", DataFrame(term=StatsModels.coefnames(m), estimate=β, stderr=se))
+
+    stats_rows = NamedTuple{(:stat, :value), Tuple{String, Float64}}[]
+    function push_stat!(label::AbstractString, thunk::Function)
+        val = try
+            thunk()
+        catch err
+            @warn "Could not compute $label" exception=(err, catch_backtrace())
+            nothing
+        end
+        if val isa Number && isfinite(val)
+            push!(stats_rows, (stat=String(label), value=float(val)))
+        end
+        return nothing
+    end
+
+    push_stat!("r2", () -> FixedEffectModels.r2(m))
+    if isdefined(FixedEffectModels, :adjr2)
+        push_stat!("adj_r2", () -> FixedEffectModels.adjr2(m))
+    elseif isdefined(StatsModels, :adjr2)
+        push_stat!("adj_r2", () -> StatsModels.adjr2(m))
+    end
+    if isdefined(FixedEffectModels, :r2_within)
+        push_stat!("r2_within", () -> FixedEffectModels.r2_within(m))
+    end
+    if isdefined(FixedEffectModels, :r2_between)
+        push_stat!("r2_between", () -> FixedEffectModels.r2_between(m))
+    end
+
+    if !isempty(stats_rows)
+        CSV.write(outprefix * "_stats.csv", DataFrame(stats_rows))
+    end
 
     # println("Current time 9: ", Dates.format(now(), "HH:MM:SS"))
 end

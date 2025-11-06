@@ -346,6 +346,33 @@ program define jlhdfe_alt, eclass
 	matrix roweq    `Vmat' = eq1
 	matrix coleq    `Vmat' = eq1
 
+	// collect auxiliary regression statistics (e.g., R²) if available
+	local __estatlist ""
+	local __statsfile "`outprefix'_stats.csv"
+	capture confirm file "`__statsfile'"
+	if !_rc {
+		capture noisily import delimited using "`__statsfile'", clear varnames(1)
+		if !_rc {
+			capture confirm variable stat
+			capture confirm variable value
+			if !_rc {
+				quietly levelsof stat, local(__statnames) clean
+				foreach __s of local __statnames {
+					quietly summarize value if stat == "`__s'"
+					if r(N) > 0 & r(mean) < . {
+						local __clean "`__s'"
+						local __clean : subinstr local __clean " " "_", all
+						local __clean : subinstr local __clean ":" "_", all
+						local __clean : subinstr local __clean "-" "_", all
+						if regexm("`__clean'","^[A-Za-z]") == 0 local __clean = "stat_`__clean'"
+						local stat_val_`__clean' = r(mean)
+						local __estatlist `__estatlist' `__clean'
+					}
+				}
+			}
+		}
+	}
+
 	restore
 
 	// === post to e() ===
@@ -376,6 +403,9 @@ program define jlhdfe_alt, eclass
 	ereturn local cluster  "`cluster'"
 	ereturn local outfix   "`outprefix'"
 	ereturn local formula  `"`FORMULA'"'
+	foreach __s of local __estatlist {
+		ereturn scalar `__s' = `stat_val_`__s''
+	}
 
 	// optional display of Julia outputs (summary + a peek at coefficients)
 	if "`display'" != "" {
