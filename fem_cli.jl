@@ -1,9 +1,9 @@
 # fem_cli.jl — minimal & robust
 # Usage:
-#   julia fem_cli.jl IN_PARQUET FORMULA_TXT CLUSTERS METHOD OUT_PREFIX [WARM_N]
+#   julia fem_cli.jl IN_PARQUET FORMULA_TXT CLUSTERS METHOD OUT_PREFIX WEIGHT_VAR WEIGHT_TYPE [WARM_N]
 # Example:
-#   julia fem_cli.jl temp.parquet formula.txt ntrab cuda fem_out 200000
-#   julia fem_cli.jl temp.parquet formula.txt ""    cpu  fem_out
+#   julia fem_cli.jl temp.parquet formula.txt ntrab cuda fem_out weight_var aweight 200000
+#   julia fem_cli.jl temp.parquet formula.txt ""    cpu  fem_out "" ""
 
 @time using DataFrames, StatsModels, FixedEffectModels, Vcov, LinearAlgebra, CSV, Parquet2, CategoricalArrays, CUDA, Dates
 #BLAS.set_num_threads(1)
@@ -94,9 +94,16 @@ end
 function main(args)
     # println("Current time 1: ", Dates.format(now(), "HH:MM:SS"))
 
-    length(args) ≥ 5 || error("Need: IN_PARQUET FORMULA_TXT CLUSTERS METHOD OUT_PREFIX [WARM_N]")
-    parquet_path, formula_txt, clusters_str, method_str, outprefix = args[1:5]
-    warm_n = (length(args) ≥ 6 && tryparse(Int, args[6]) !== nothing) ? parse(Int, args[6]) : 0
+    length(args) ≥ 7 || error("Need: IN_PARQUET FORMULA_TXT CLUSTERS METHOD OUT_PREFIX WEIGHT_VAR WEIGHT_TYPE [WARM_N]")
+    parquet_path, formula_txt, clusters_str, method_str, outprefix, weight_var_raw, weight_type_raw = args[1:7]
+    warm_n = (length(args) ≥ 8 && tryparse(Int, args[8]) !== nothing) ? parse(Int, args[8]) : 0
+    weight_var  = strip(weight_var_raw)
+    weight_type = lowercase(strip(weight_type_raw))
+    if isempty(weight_var) != isempty(weight_type)
+        @warn "Weight variable/type mismatch; ignoring weights." weight_var weight_type
+        weight_var = ""
+        weight_type = ""
+    end
 
     # println("Current time 2: ", Dates.format(now(), "HH:MM:SS"))
 
@@ -106,13 +113,55 @@ function main(args)
     println("Formula (Stata):        ", raw_formula)
     println("Formula (StatsModels):  ", translated)
     println("Clusters:               ", clusters_str)
+    if isempty(weight_type) || isempty(weight_var)
+        println("Weights:                (none)")
+    else
+        println("Weights:                ", weight_type, " -> ", weight_var)
+    end
 
     # println("Current time 3: ", Dates.format(now(), "HH:MM:SS"))
 
     # load only referenced columns (RHS+LHS+FE+clusters)
     cols = Symbol.(needed_vars(translated, fevars, clusters_str))
+    weight_sym = nothing
+    if !isempty(weight_var)
+        try
+            weight_sym = Symbol(weight_var)
+            if !(weight_sym in cols)
+                push!(cols, weight_sym)
+            end
+        catch err
+            error("Invalid weight variable name '$weight_var'")
+        end
+    end
     @time ds = Parquet2.Dataset(parquet_path)
     @time df = DataFrame(Parquet2.select(ds, cols...); copycols=false)
+    if weight_sym !== nothing
+        if !hasproperty(df, weight_sym)
+            error("Weight column '$weight_var' not found in parquet data")
+        end
+        wcol_any = df[!, weight_sym]
+        if !(eltype(wcol_any) <: Real)
+            error("Weight column '$weight_var' must be numeric")
+        end
+        wvals = Float64.(wcol_any)
+        if weight_type in ("fweight", "frequency")
+            if any(x -> !isfinite(x) || x < 0 || x != round(x), wvals)
+                error("fweights must be nonnegative integers")
+            end
+            df[!, weight_sym] = round.(Int, wvals)
+        elseif weight_type in ("pweight", "probability")
+            if any(x -> !isfinite(x) || x <= 0, wvals)
+                error("pweights must be positive")
+            end
+            df[!, weight_sym] = wvals
+        else
+            if any(x -> !isfinite(x) || x <= 0, wvals)
+                @warn "Non-positive analytic weights detected; they will be passed through as-is." weight_var
+            end
+            df[!, weight_sym] = wvals
+        end
+    end
     # display the column names loaded
     println("Loaded columns: ", names(df))
 
@@ -172,7 +221,8 @@ function main(args)
         CUDA.precompile_runtime()
         if warm_n > 0
             warm = first(df, min(nrow(df), warm_n))
-            @time _ = reg(warm, f; method=:CUDA, progress_bar=false)
+            warm_kwargs = weight_sym === nothing ? (; progress_bar=false) : (; weights=weight_sym, progress_bar=false)
+            @time _ = reg(warm, f; method=:CUDA, warm_kwargs...)
             CUDA.synchronize()
         end
         println("CUDA is ready.")
@@ -183,7 +233,8 @@ function main(args)
     # println("Current time 7: ", Dates.format(now(), "HH:MM:SS"))
 
     # fit + outputs
-    @time m = reg(df, f, vc; method=method, progress_bar=false)
+    reg_kwargs = weight_sym === nothing ? (; progress_bar=false) : (; weights=weight_sym, progress_bar=false)
+    @time m = reg(df, f, vc; method=method, reg_kwargs...)
     open(outprefix * "_summary.txt", "w") do io
         show(io, MIME"text/plain"(), m); println(io)
     end

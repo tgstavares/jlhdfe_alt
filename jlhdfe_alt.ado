@@ -1,9 +1,9 @@
 program define jlhdfe_alt, eclass
 	version 15.1
-	// Stata-style front-end for fem_cli.jl with [if] [in]
+	// Stata-style front-end for fem_cli.jl with [if] [in] and weights
 
 	// --- PARSE OPTIONS ---
-	syntax anything(name=spec) [if] [in] , ///
+	syntax anything(name=spec) [if] [in] [aw fw pw iw] , ///
 		[ absorb(varlist) vce(string) ///
 		method(name) threads(integer 0) outprefix(name) pqfile(string) ///
 		julia(string) femcli(string) display ]
@@ -15,6 +15,29 @@ program define jlhdfe_alt, eclass
 	if "`outprefix'" == "" local outprefix "fem_out"
 	if "`pqfile'"    == "" local pqfile    "temp.parquet"
 	if "`julia'"     == "" local julia     "julia"
+
+	// weights (expression must reduce to a single variable)
+	local weight_type ""
+	local weight_var  ""
+	if "`weight'" != "" {
+		local weight_type "`weight'"
+		local weight_type : lower local weight_type
+
+		local weight_var "`exp'"
+		local weight_var : subinstr local weight_var "=" "", 1
+		local weight_var : list retokenize weight_var
+		local nwords : word count weight_var
+		if `nwords' != 1 {
+			di as err "weight expression must be a single variable name."
+			exit 198
+		}
+		local weight_var : word 1 of weight_var
+		capture confirm variable `weight_var'
+		if _rc {
+			di as err "weight variable `weight_var' not found."
+			exit _rc
+		}
+	}
 
 	* --- fem_cli.jl path resolution ---
 	if "`femcli'" == "" {
@@ -225,9 +248,35 @@ program define jlhdfe_alt, eclass
 
 
 	// Restrict sample [if][in] and export parquet
-	local KEEPLIST `y' `W' `FBASES' `absorb' `XVARS' `ZVARS'
-	tokenize "`cluster'", parse(",")
-	if "`1'" != "" & "`2'" == "" local KEEPLIST `KEEPLIST' `1'
+	local cluster_vars ""
+	if "`cluster'" != "" {
+		local cluster_vars "`cluster'"
+		local cluster_vars : subinstr local cluster_vars "," " ", all
+	}
+	tempvar touse
+	gen byte `touse' = 0
+	quietly replace `touse' = 1 `if' `in'
+
+	local marklist `y' `W'
+	local marklist : list retokenize marklist
+	if "`weight_var'" != "" local marklist `marklist' `weight_var'
+	local marklist : list retokenize marklist
+	local marklist : list uniq marklist
+	foreach v of local marklist {
+		capture confirm variable `v'
+		if !_rc {
+			quietly replace `touse' = 0 if missing(`v')
+		}
+	}
+
+	local KEEPLIST `y' `W' `FBASES' `absorb' `XVARS' `ZVARS' `cluster_vars'
+	if "`weight_var'" != "" local KEEPLIST `KEEPLIST' `weight_var'
+	local KEEPLIST : list uniq KEEPLIST
+	quietly count if `touse'
+	if r(N) == 0 {
+		di as err "No observations satisfy the sample restrictions or have nonmissing data."
+		exit 2000
+	}
 
 	// prepare cluster positional arg (literal "" if empty)
 	local CLARG = trim("`cluster'")
@@ -235,10 +284,8 @@ program define jlhdfe_alt, eclass
 	if `"`CLARG'"' != "" local CLARGQ `"`CLARG'"'
 
 	preserve
-	// Apply [in] then [if]
-	// Apply [in] then [if]
-        if "`in'" != "" keep `in'
-	if "`if'" != "" keep `if'
+	keep if `touse'
+	drop `touse'
 
         // Trim to variables we'll send to Julia
         if "`KEEPLIST'" != "" keep `KEEPLIST'
@@ -265,7 +312,11 @@ program define jlhdfe_alt, eclass
         // build + run Julia cmd
         local CMD ""
 	if `threads' > 0 local CMD `"JULIA_NUM_THREADS=`threads' "'
-	local CMD `"`CMD'`julia' "`femcli'" "`pqfile'" "formula.txt" `CLARGQ' "`method'" "`outprefix'" 0"'
+	local WARG `""""'
+	if "`weight_var'" != "" local WARG `"`weight_var'"'
+	local WTYPEARG `""""'
+	if "`weight_type'" != "" local WTYPEARG `"`weight_type'"'
+	local CMD `"`CMD'`julia' "`femcli'" "`pqfile'" "formula.txt" `CLARGQ' "`method'" "`outprefix'" `WARG' `WTYPEARG' 0"'
 	di as txt ">> " as res `"`CMD'"'
 	! `CMD'
 
@@ -374,6 +425,7 @@ program define jlhdfe_alt, eclass
 	}
 
 	restore
+	capture drop `touse'
 
 	// === post to e() ===
 	ereturn clear
@@ -403,6 +455,14 @@ program define jlhdfe_alt, eclass
 	ereturn local cluster  "`cluster'"
 	ereturn local outfix   "`outprefix'"
 	ereturn local formula  `"`FORMULA'"'
+	if "`weight_type'" != "" {
+		ereturn local wtype "`weight_type'"
+		ereturn local wexp  "`weight_var'"
+	}
+	else {
+		ereturn local wtype ""
+		ereturn local wexp  ""
+	}
 	foreach __s of local __estatlist {
 		ereturn scalar `__s' = `stat_val_`__s''
 	}
